@@ -1,16 +1,25 @@
+import os
 import requests
 import pandas as pd
 import matplotlib.pyplot as plt
 import datetime as dt
+from pymongo import MongoClient
+from dotenv import load_dotenv
+
+# get enironmet variables
+load_dotenv()
+DB_URI = os.getenv('DB_URI')
+print('DB==', DB_URI)  # Check that env variabes are loaded correctly
 
 URL = "https://api.binance.com/api/v3/klines"
 tokenpair = "ETHBUSD"
 interval_short = "5m"
 interval_medium = "1h"
 interval_long = "6h"
-PARAMS_SHORT = {'symbol': tokenpair, 'interval': interval_short}
-PARAMS_MEDIUM = {'symbol': tokenpair, 'interval': interval_medium}
-PARAMS_LONG = {'symbol': tokenpair, 'interval': interval_long}
+limit = 1000
+PARAMS_SHORT = {'symbol': tokenpair, 'interval': interval_short, 'limit': limit}
+PARAMS_MEDIUM = {'symbol': tokenpair, 'interval': interval_medium, 'limit': limit}
+PARAMS_LONG = {'symbol': tokenpair, 'interval': interval_long, 'limit': limit}
 
 # intervals supported: 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 12h, 1d, 3d, 1w, 1mo
 
@@ -33,9 +42,14 @@ PARAMS_LONG = {'symbol': tokenpair, 'interval': interval_long}
 # short term data
 raw_data = requests.get(url=URL, params=PARAMS_SHORT)
 json_data = raw_data.json()
-df = pd.DataFrame(json_data, columns=['OpenTime', 'Open', 'High', 'Low', 'Close', 'Volume', 'CloseTime', 'QuoteAssetVolume',
-                                      'QtyOfTrades', 'TBBAV', 'TBQAV', 'Ignore'])
+df = pd.DataFrame(json_data, columns=['OpenTime', 'Open', 'High', 'Low', 'Close', 'Volume', 'CloseTime', 'QuoteAssetVolume', 'QtyOfTrades', 'TBBAV', 'TBQAV', 'Ignore'])
+
+df['Open'] = df['Open'].astype(float)
 df['Close'] = df['Close'].astype(float)
+df['High'] = df['High'].astype(float)
+df['Low'] = df['Low'].astype(float)
+df['Volume'] = df['Volume'].astype(float)
+df['QtyOfTrades'] = df['QtyOfTrades'].astype(float)
 df['timeindex'] = [dt.datetime.fromtimestamp(x / 1000.0) for x in df.CloseTime]
 
 # Medium term price data
@@ -62,3 +76,13 @@ ax = df.plot(x='timeindex', y='Close', title=tokenpair + ' :: Price Data', label
 df2.plot(ax=ax, x='timeindex', y='Close', label="Close " + interval_medium)
 df3.plot(ax=ax, x='timeindex', y='Close', label="Close " + interval_long)
 plt.show()
+
+# Save the price data to Database - prevent over use of api and backup data
+db_client = MongoClient(DB_URI)
+database = db_client.trader
+print(database.list_collection_names())
+dict = df.to_dict('records')
+collection = database['ETHBUSD-5m']
+x= collection.delete_many({})
+x = collection.insert_many(df.to_dict('records'))
+print(len(x.inserted_ids), 'price entries added to the database')
