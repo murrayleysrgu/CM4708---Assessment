@@ -13,7 +13,9 @@ from sklearn.metrics import mean_squared_error
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense
 from tensorflow.keras.layers import LSTM
-from tensorflow.keras.layers import GRU 
+from tensorflow.keras.layers import GRU
+
+from tensorflow.keras.models import load_model
 
 
 # get enironmet variables
@@ -25,43 +27,38 @@ db_client = pymongo.MongoClient(DB_URI)
 database = db_client.trader
 
 # Get price data from database
-collection = database['ETHBUSD-5m']
-x = collection.find()
+collection = database['ETHBUSD-1h']
+x = collection.find().sort("CloseTime", 1)
 df = pd.DataFrame(list(x))
 min5 = df
-hrdata = df[df.OpenTime % 3600000 == 0].reset_index()['Close']
 df1 = df.reset_index()['Close']
-print(hrdata)
-print(df1.shape)
-
-collection = database['ETHBUSD-1m']
-x1 = collection.find()
-df1min = pd.DataFrame(list(x1))
 
 plt.plot(df1)
 ax = df.plot(x='timeindex', y='Close', label="Close 5m")
-df1min.plot(ax=ax, x='timeindex', y='Close', label="Close 1m")
 plt.show()
 
-scaler = MinMaxScaler(feature_range=(0,1))
-df1 = scaler.fit_transform(np.array(df1).reshape(-1,1))
+scaler = MinMaxScaler(feature_range=(0, 1))
+df1 = scaler.fit_transform(np.array(df1).reshape(-1, 1))
 print(df1.shape)
 
 
-training_size = int(len(df1)*0.80)
+training_size = int(len(df1) * 0.80)
 test_size = len(df1) - training_size
 
 
 training_data, test_data = df1[0:training_size, :], df1[training_size:len(df1), :1]
+print("TEST DATAA", test_data)
 
 
-def create_windowed_dataset(dataset, step=1):
+# Create rolling window datasets x = last window (eg 100) prices , y = price to predict
+def create_windowed_dataset(dataset, window_size=1):
     dataX, dataY = [], []
-    for i in range(len(dataset) - step - 1):
-        a = dataset[i:i + step, 0]
+    for i in range(len(dataset) - window_size - 1):
+        a = dataset[i:i + window_size, 0]
         dataX.append(a)
-        dataY.append(dataset[i + step, 0])
+        dataY.append(dataset[i + window_size, 0])
     return np.array(dataX), np.array(dataY)
+
 
 window = 100
 x_train, y_train = create_windowed_dataset(training_data, window)
@@ -76,23 +73,38 @@ print(y_test.shape)
 x_train = x_train.reshape(x_train.shape[0], x_train.shape[1], 1)
 x_test = x_test.reshape(x_test.shape[0], x_test.shape[1], 1)
 
-model = Sequential()
-model.add(GRU(50, return_sequences=True, input_shape=(100, 1)))
-model.add(GRU(50, return_sequences=True))
-model.add(GRU(50))
-model.add(Dense(1))
-model.compile(loss='mean_squared_error', optimizer='adam')
+gru_model = Sequential()
+gru_model.add(GRU(50, return_sequences=True, input_shape=(window, 1)))
+gru_model.add(GRU(50, return_sequences=True))
+gru_model.add(GRU(50))
+gru_model.add(Dense(1))
+gru_model.compile(loss='mean_squared_error', optimizer='adam')
 
-model.summary()
+gru_model.summary()
+gru_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=10, batch_size=64, verbose=1)
+gru_model.save("ethbusdmodel-1h-gru.h5")
 
-model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=100, batch_size=64, verbose=1)
+
+lstm_model = Sequential()
+lstm_model.add(LSTM(25, return_sequences=True, input_shape=(window, 1)))
+lstm_model.add(LSTM(25, return_sequences=True))
+lstm_model.add(LSTM(25))
+lstm_model.add(Dense(1))
+lstm_model.compile(loss='mean_squared_error', optimizer='adam')
+
+lstm_model.summary()
+lstm_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=100, batch_size=64, verbose=1)
+lstm_model.save("ethbusdmodel-1h-lstm.h5")
 
 
-train_predictions = model.predict(x_train)
-test_predictions = model.predict(x_test)
+new_model = load_model("ethbusdmodel-1h-gru.h5")
+train_predictions = gru_model.predict(x_train)
+test_predictions = gru_model.predict(x_test)
+loaded_predictions = new_model.predict(x_test)
 
-train_predictions=scaler.inverse_transform(train_predictions)
-test_predictions=scaler.inverse_transform(test_predictions)
+train_predictions = scaler.inverse_transform(train_predictions)
+test_predictions = scaler.inverse_transform(test_predictions)
+loaded_predictions = scaler.inverse_transform(loaded_predictions)
 
 print('train error:', math.sqrt(mean_squared_error(y_train, train_predictions)))
 print('test error:', math.sqrt(mean_squared_error(y_test, test_predictions)))
@@ -111,3 +123,6 @@ plt.plot(scaler.inverse_transform(df1))
 plt.plot(train_predict_plot, marker='o')
 plt.plot(test_predict_plot, marker='o')
 plt.show()
+
+print(test_predictions)
+print(loaded_predictions)
